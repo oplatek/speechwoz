@@ -21,6 +21,19 @@ def initialize():
     )
 
 
+def start_recording():
+    pass
+
+
+def save_audio(participant_id, conv_id, turn_id):
+    pass
+
+
+def mark_audio_failure(participant_id, conv_id, turn_id):
+    # TODO save also the failure audio
+    pass
+
+
 @st.cache(suppress_st_warning=True)
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -181,41 +194,62 @@ def run_application(args):
         }
 
     """
+    if "recordings" not in st.session_state:
+        st.session_state["recordings"] = defaultdict(dict)
+    if "turn_id" not in st.session_state:
+        st.session_state["turn_id"] = 0
+
+    if "conv_id_idx" not in st.session_state:
+        st.session_state["conv_id_idx"] = 0
+
+    if "recording" not in st.session_state:
+        st.session_state["recording"] = False
+
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
-    st.sidebar.title("Role playing")
-    button_placeholders = [
-        st.sidebar.empty() for i in range(len(st.session_state["conversations"]))
-    ]
+    st.sidebar.title("Role playing of System and User")
+
+    # create participang_id
+    params = st.experimental_get_query_params()
+    if "participant_id" not in st.session_state:
+        st.session_state["participant_id"] = params.get(
+            "PROLIFIC_PID",
+            [
+                "".join(
+                    random.choice(string.ascii_lowercase + string.digits)
+                    for i in range(8)
+                )
+            ],
+        )[0]
+
+    progress_msgs = []
+    completed_all = []
+    for i, conv_id in enumerate(st.session_state["conversations"]):
+        completed = sum(st.session_state["recordings"][conv_id].values())
+        total = conversation_len(conv_id)
+        completed_all.append(completed == total)
+        progress_msgs.append(f"Conversation {i+1} ({completed}/{total} completed)")
+    st.sidebar.markdown(" ".join(progress_msgs))
 
     with st.sidebar.form(key="feedback-form"):
-        note = st.text_area("Leave us a note:")
+        st.text_input("Your native language(s)")
+        st.text_input("Age")
+        st.text_input("Sex", "female / male")
+        note = st.text_area("Leave us feedback:")
         warning_placeholder = st.empty()
         final_submit = st.form_submit_button("Submit feedback")
 
     submitted = False
     if final_submit:
-
         submitted = True
 
-        if completed:
+        if all(completed_all):
 
             st.title("Thank you!")
             st.balloons()
 
-            params = st.experimental_get_query_params()
-            participant_id = params.get(
-                "PROLIFIC_PID",
-                [
-                    "".join(
-                        random.choice(string.ascii_lowercase + string.digits)
-                        for i in range(8)
-                    )
-                ],
-            )[0]
-
             outdir = Path(args.outdir) / args.name
-            metadataname = participant_id + ".json"
+            metadataname = st.session_state["participant_id"] + ".json"
 
             outdir.mkdir(exist_ok=True)
 
@@ -237,93 +271,113 @@ def run_application(args):
             return
 
     if submitted:
+        if any(
+            [
+                sum(st.session_state["recordings"][cid].values())
+                < conversation_len(cid)
+                for cid in st.session_state["conversations"]
+            ]
+        ):
+            warning_placeholder.error(
+                "You have to record all the conversrations first!"
+            )
         warning_placeholder.error("You have to fill in the study first!")
 
     #
     # Conversation page
 
-    if "recordings" not in st.session_state:
-        st.session_state["recordings"] = defaultdict(dict)
-    if "turn_id" not in st.session_state:
-        st.session_state["turn_id"] = 0
-
-    if "conversation_selected" not in st.session_state:
-        st.session_state["conversation_selected"] = [False] * len(
-            st.session_state["conversations"]
-        )
-
-    def select_conversation():
-        st.session_state["conversation_selected"] = [
-            getattr(st.session_state, f"selection_{id}")
-            for id in st.session_state["conversations"]
-        ]
-        st.session_state["turn_id"] = 0
-
-    for i, conv_id in enumerate(st.session_state["conversations"]):
-        completed = len(st.session_state["recordings"][conv_id].values())
-        total = conversation_len(conv_id)
-        button_placeholders[i].button(
-            f"Conversation {i+1} ({completed}/{total} completed)",
-            key=f"selection_{conv_id}",
-            on_click=select_conversation,
-        )
-
     #
     # Turn page
 
-    for selected, conv_id in zip(
-        st.session_state["conversation_selected"], st.session_state["conversations"]
-    ):
-        if not selected:
-            continue
+    # Assumes Python 3.7+ and stable keys sort
+    conv_id = list(st.session_state["conversations"])[st.session_state["conv_id_idx"]]
 
-        turn_id = st.session_state["turn_id"]
+    turn_id = st.session_state["turn_id"]
+    turns = st.session_state["conversations"][conv_id]["turns"]
+    turns2display = turns[:turn_id]
+    current_turn = turns[turn_id]
 
-        st.subheader("🗨️ &nbsp; Past dialog utterances:")
-        st.progress((turn_id + 1) / (conversation_len(conv_id)))
+    logging.warning(f"DEBUGA {conv_id}")
+    # navigation
+    def record_stop():
+        if st.session_state["recording"]:
+            st.session_state["recording"] = False
+            logging.debug("stopping recording")
+            save_audio(st.session_state["participant_id"], conv_id, turn_id)
+            st.session_state["recordings"][conv_id][turn_id] = 1
+            logging.warning(f"DEBUGB {conv_id} ")
 
-        turns = st.session_state["conversations"][conv_id]["turns"]
-
-        # past turns
-        for turn in turns:
-            if turn["turn_id"] == turn_id:
-                # Stop before actual turn
-                break
-            if turn["speaker"] == "USER":
-                st.info(f"*USR:* {turn['utterance']}")
-            else:
-                st.warning(f"*SYS:* {turn['utterance']}")
-
-        # TODO dialogue history
-        # db_results = [
-        #     f"{domain}: {len(turn_data.api_result[domain]['results'])}"
-        #     for domain in turn_data.api_result
-        # ]
-        # st.error(f"*Available database entries:* {', '.join(db_results)}")
-
-        current_turn = turns[turn_id]
-
-        st.subheader(f"🏆 &nbsp; Record the {current_turn['speaker']} reply:")
-
-        def prev_turn():
-            if turn_id > 0:
-                st.session_state["turn_id"] -= 1
-
-        def next_turn():
-            if turn_id < conversation_len(conv_id) - 1:
+            if turn_id < len(turns) - 1:
+                # before end of conversation
                 st.session_state["turn_id"] += 1
-            # TODO some checks
+            else:
+                # end of conversation
+                if (
+                    st.session_state["conv_id_idx"]
+                    == len(st.session_state["conversations"]) - 1
+                ):  # All unselected
+                    # All conversations done
+                    st.balloons()
+                    st.title("Please fill the survey and you are finished!")
+                else:
+                    st.session_state["conv_id_idx"] += 1
 
-        with st.form(key="my_form"):
+        else:
+            st.session_state["recording"] = True
+            logging.warning("starting recording")
+            # starting recording
+            start_recording()
 
-            left, right, _ = st.columns([8, 8, 53])
-            left.form_submit_button("« previous turn", on_click=prev_turn)
-            right.form_submit_button(
-                "Submit"
-                if turn_id == conversation_len(conv_id) - 1
-                else "Submit & next »",
-                on_click=next_turn,
-            )
+    def discard():
+        # TODO BUG discard uses turn_id + 1 turn :-P
+        st.session_state["recordings"][conv_id][turn_id] = 0
+
+        mark_audio_failure(st.session_state["participant_id"], conv_id, turn_id)
+        st.session_state["recording"] = False
+
+    logging.warning(f"DEBUGC {conv_id} ")
+    with st.form(key="turn_navigation_form"):
+        left, right = st.columns([20, 20])
+        msg_record_stop = (
+            f"⏹ Stop recording '{current_turn['speaker']}' prompt"
+            if st.session_state["recording"]
+            else f"⏺ Record '{current_turn['speaker']}' prompt"
+        )
+        left.form_submit_button(msg_record_stop, on_click=record_stop)
+        right.form_submit_button("🗑 Discard this recording ", on_click=discard)
+
+    ### recording
+
+    #### display current turn
+    # greyer colours in past turns
+    if current_turn["speaker"] == "USER":
+        st.info(f"{current_turn['utterance']}")
+    else:
+        st.warning(f"{current_turn['utterance']}")
+
+    st.subheader("🗨️ &nbsp; Past dialog utterances:")
+    st.progress((turn_id + 1) / (conversation_len(conv_id)))
+
+    # past turns
+    for turn in reversed(turns2display):
+        # __import__("ipdb").set_trace()
+        if turn["turn_id"] == turn_id:
+            # Stop before actual turn
+            break
+        if turn["speaker"] == "USER":
+            st.info(f"{turn['utterance']}")
+        else:
+            st.warning(f"{turn['utterance']}")
+    else:
+        st.warning(f"A conversation start - the recorded prompts will appear here.")
+    logging.warning(f"DEBUGZ {conv_id} ")
+
+    # TODO dialogue history
+    # db_results = [
+    #     f"{domain}: {len(turn_data.api_result[domain]['results'])}"
+    #     for domain in turn_data.api_result
+    # ]
+    # st.error(f"*Available database entries:* {', '.join(db_results)}")
 
 
 if __name__ == "__main__":
