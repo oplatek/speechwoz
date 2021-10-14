@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 from collections import defaultdict
 import logging
 import string
@@ -45,6 +46,13 @@ def parse_args():
         help="A json file containing MultiWOZ_2.2. data (JSON).",
     )
     parser.add_argument(
+        "-p",
+        "--prolific_token",
+        type=str,
+        required=True,
+        help="prolific token so the people can",
+    )
+    parser.add_argument(
         "-s",
         "--summary",
         type=str,
@@ -61,13 +69,13 @@ def parse_args():
     parser.add_argument(
         "--max-convs",
         type=int,
-        default=4,
+        default=1,
         help="Maximal number of conversations shown to the participant.",
     )
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=20,
+        default=7,
         help="Soft upper bound for the number of dialog turns (in total) shown to the participant.",
     )
     parser.add_argument(
@@ -127,7 +135,7 @@ def prepare_data(args):
 
         eval_converasations = {}
         for i, c in conversations.items():
-            if len(eval_converasations) > args.max_convs:
+            if len(eval_converasations) >= args.max_convs:
                 break
             if len(c["turns"]) > args.max_turns:
                 logging.warning(f"Filtering out too long conversation: {i}")
@@ -135,6 +143,7 @@ def prepare_data(args):
             eval_converasations[i] = c
 
     st.session_state["conversations"] = eval_converasations
+    st.session_state["prolific_token"] = args.prolific_token
 
 
 def run_application(args):
@@ -207,7 +216,7 @@ def run_application(args):
 
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
-    st.sidebar.title("Role playing of System and User")
+    st.sidebar.title("Act as agent or user")
 
     # create participang_id
     params = st.experimental_get_query_params()
@@ -224,26 +233,29 @@ def run_application(args):
 
     progress_msgs = []
     completed_all = []
-    for i, conv_id in enumerate(st.session_state["conversations"]):
-        completed = sum(st.session_state["recordings"][conv_id].values())
-        total = conversation_len(conv_id)
+    for i, cid in enumerate(st.session_state["conversations"]):
+        completed = sum(st.session_state["recordings"][cid].values())
+        total = conversation_len(cid)
         completed_all.append(completed == total)
         progress_msgs.append(f"Conversation {i+1} ({completed}/{total} completed)")
-    st.sidebar.markdown(" ".join(progress_msgs))
+    st.sidebar.markdown(" <br />\n".join(progress_msgs))
 
     with st.sidebar.form(key="feedback-form"):
-        st.text_input("Your native language(s)")
-        st.text_input("Age")
-        st.text_input("Sex", "female / male")
+        lang = st.text_input("Your native language(s)")
+        age = st.text_input("Age")
+        sex_default = "female / male"
+        sex = st.text_input("Sex", sex_default)
         note = st.text_area("Leave us feedback:")
         warning_placeholder = st.empty()
         final_submit = st.form_submit_button("Submit feedback")
+
+    questionnaire_filled = len(lang) > 0 and len(age) > 0 and sex != sex_default
 
     submitted = False
     if final_submit:
         submitted = True
 
-        if all(completed_all):
+        if all(completed_all) and questionnaire_filled:
 
             st.title("Thank you!")
             st.balloons()
@@ -251,7 +263,7 @@ def run_application(args):
             outdir = Path(args.outdir) / args.name
             metadataname = st.session_state["participant_id"] + ".json"
 
-            outdir.mkdir(exist_ok=True)
+            os.makedirs(outdir, exist_ok=True)
 
             with open(outdir / metadataname, "w+") as f:
                 json.dump(
@@ -260,14 +272,10 @@ def run_application(args):
                     indent=2,
                 )
 
-            wait_time = 3
-            status_text = st.empty()
-            for i in range(wait_time):
-                status_text.success(
-                    f"You will be redirected to Prolific in {wait_time - i} s!"
-                )
-                time.sleep(1)
-            # TODO redirection to prolific page
+            st.success("Thank you! Your are finished! Click below.")
+            st.markdown(
+                f"[Complete the study on prolific!](https://app.prolific.co/submissions/complete?cc={st.session_state['prolific_token']})"
+            )
             return
 
     if submitted:
@@ -281,7 +289,8 @@ def run_application(args):
             warning_placeholder.error(
                 "You have to record all the conversrations first!"
             )
-        warning_placeholder.error("You have to fill in the study first!")
+        if not questionnaire_filled:
+            warning_placeholder.error("You have to fill the form first!")
 
     #
     # Conversation page
@@ -310,6 +319,9 @@ def run_application(args):
             if turn_id < len(turns) - 1:
                 # before end of conversation
                 st.session_state["turn_id"] += 1
+                logging.warning(
+                    f"conv: {conv_id}, turn: {turn_id}, {st.session_state['recordings']}"
+                )
             else:
                 # end of conversation
                 if (
@@ -321,6 +333,8 @@ def run_application(args):
                     st.title("Please fill the survey and you are finished!")
                 else:
                     st.session_state["conv_id_idx"] += 1
+                    st.session_state["turn_id"] = 0
+                    logging.warning(f"New conv conv: {conv_id}, turn: {turn_id}")
 
         else:
             st.session_state["recording"] = True
@@ -338,10 +352,11 @@ def run_application(args):
     logging.warning(f"DEBUGC {conv_id} ")
     with st.form(key="turn_navigation_form"):
         left, right = st.columns([20, 20])
+        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
         msg_record_stop = (
-            f"⏹ Stop recording '{current_turn['speaker']}' prompt"
+            f"⏹ Stop recording '{speaker}' prompt"
             if st.session_state["recording"]
-            else f"⏺ Record '{current_turn['speaker']}' prompt"
+            else f"⏺ Record '{speaker}' prompt"
         )
         left.form_submit_button(msg_record_stop, on_click=record_stop)
         right.form_submit_button("🗑 Discard this recording ", on_click=discard)
@@ -369,7 +384,9 @@ def run_application(args):
         else:
             st.warning(f"{turn['utterance']}")
     else:
-        st.warning(f"A conversation start - the recorded prompts will appear here.")
+        st.markdown(
+            "**➼➼➼➼➼➼ A NEW CONVERSATION ** ...   _The prompts you record appear here._"
+        )
     logging.warning(f"DEBUGZ {conv_id} ")
 
     # TODO dialogue history
