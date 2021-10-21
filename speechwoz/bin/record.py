@@ -1,3 +1,9 @@
+from streamlit_webrtc import (
+    webrtc_streamer,
+    WebRtcMode,
+    WebRtcStreamerContext,
+)
+from aiortc.contrib.media import MediaRecorder
 from pathlib import Path
 import os
 from collections import defaultdict
@@ -7,9 +13,44 @@ import random
 import numpy as np
 import json
 import argparse
-import time
-
 import streamlit as st
+from datetime import datetime
+from lhotse import MonoCut, Recording, CutSet
+
+
+TMP_DIR = Path("./rec")
+if not TMP_DIR.exists():
+    TMP_DIR.mkdir(exist_ok=True, parents=True)
+
+MEDIA_STREAM_CONSTRAINTS = {
+    "video": False,
+    "audio": {
+        # these setting doesn't work
+        # "sampleRate": 48000,
+        # "sampleSize": 16,
+        # "channelCount": 1,
+        "echoCancellation": False,  # don't turn on else it would reduce wav quality
+        "noiseSuppression": True,
+        "autoGainControl": True,
+    },
+}
+
+
+def aiortc_audio_recorder(wavpath):
+    def recorder_factory():
+        logging.warning("Saving {wavpath}")
+        return MediaRecorder(wavpath, format="wav")
+
+    webrtc_ctx: WebRtcStreamerContext = webrtc_streamer(
+        key="webrtc_streamer",
+        # audio_receiver_size=4,
+        audio_receiver_size=256,
+        sendback_audio=False,
+        mode=WebRtcMode.SENDONLY,
+        # mode=WebRtcMode.SENDRECV,
+        in_recorder_factory=recorder_factory,
+        media_stream_constraints=MEDIA_STREAM_CONSTRAINTS,
+    )
 
 
 def initialize():
@@ -22,17 +63,18 @@ def initialize():
     )
 
 
-def start_recording():
-    pass
-
-
-def save_audio(participant_id, conv_id, turn_id):
-    pass
-
-
-def mark_audio_failure(participant_id, conv_id, turn_id):
-    # TODO save also the failure audio
-    pass
+def save_audio(
+    participant_id, conv_id, turn_id, segment, segment_start, conversation_start
+):
+    start = (segment_start - conversation_start).total_seconds()
+    duration = (datetime.now() - segment_start).total_seconds()
+    c = MonoCut(
+        id=f"{participant_id}-{conv_id}-{turn_id}-{segment}",
+        start=segment_start,
+        duration=duration,
+        channel=0,
+    )
+    return c
 
 
 @st.cache(suppress_st_warning=True)
@@ -231,6 +273,14 @@ def run_application(args):
             ],
         )[0]
 
+    participant_id = st.session_state["participant_id"]
+    outdir = Path(args.outdir) / args.name
+    os.makedirs(outdir, exist_ok=True)
+    wavpath = f"{outdir}/{participant_id}.wav"
+    cuts = []
+
+    aiortc_audio_recorder(wavpath)  # first way
+
     progress_msgs = []
     completed_all = []
     for i, cid in enumerate(st.session_state["conversations"]):
@@ -255,22 +305,28 @@ def run_application(args):
     if final_submit:
         submitted = True
 
-        if all(completed_all) and questionnaire_filled:
+        if (
+            all(completed_all)
+            and questionnaire_filled
+            # and not st.session_state["webrtc_ctx"].state.playing
+        ):
 
             st.title("Thank you!")
             st.balloons()
 
-            outdir = Path(args.outdir) / args.name
-            metadataname = st.session_state["participant_id"] + ".json"
+            customd = {"prolificPID": participant_id}
 
-            os.makedirs(outdir, exist_ok=True)
-
-            with open(outdir / metadataname, "w+") as f:
-                json.dump(
-                    {"TODO": "Collect audio stats, number of retries"},
-                    f,
-                    indent=2,
+            r = Recording.from_file(wavpath)
+            cuts = [
+                fastcopy(
+                    c,
+                    recording=r,
+                    supervisions=[fastcopy(c.supervisions[0], custom=customd)],
                 )
+                for c in cuts
+            ]
+            cs = CutSet(cuts=cuts)
+            cs.to_file(outdir / f"{participant_id}.jsonl.gz")
 
             st.success("Thank you! Your are finished! Click below.")
             st.markdown(
@@ -279,6 +335,9 @@ def run_application(args):
             return
 
     if submitted:
+        # if st.session_state["webrtc_ctx"].state.playing:
+        #     warning_placeholder.error("You have to stop the recording first!")
+
         if any(
             [
                 sum(st.session_state["recordings"][cid].values())
@@ -306,60 +365,87 @@ def run_application(args):
     turns2display = turns[:turn_id]
     current_turn = turns[turn_id]
 
+    # if not st.session_state["webrtc_ctx"].state.playing:
+    #     st.warning("Waiting for recording to start")
+    #     return
+
+    conversation_start = datetime.now()
+    st.session_state["segment"] = "coffee"
+    st.session_state["segment_start"] = conversation_start
+
+    info_break = st.empty()
+
     logging.warning(f"DEBUGA {conv_id}")
     # navigation
-    def record_stop():
-        if st.session_state["recording"]:
-            st.session_state["recording"] = False
-            logging.debug("stopping recording")
-            save_audio(st.session_state["participant_id"], conv_id, turn_id)
-            st.session_state["recordings"][conv_id][turn_id] = 1
-            logging.warning(f"DEBUGB {conv_id} ")
+    def start_turn():
+        # end of previous segment
+        cuts.append(
+            save_audio(
+                participant_id,
+                conv_id,
+                turn_id,
+                st.session_state["segment"],
+                st.session_state["segment_start"],
+                conversation_start,
+            )
+        )
+        # new segment
+        info_break = st.empty()
+        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
+        st.session_state["segment_start"], st.session_state["segment"] = (
+            datetime.now(),
+            speaker,
+        )
 
-            if turn_id < len(turns) - 1:
-                # before end of conversation
-                st.session_state["turn_id"] += 1
-                logging.warning(
-                    f"conv: {conv_id}, turn: {turn_id}, {st.session_state['recordings']}"
+        st.session_state["recordings"][conv_id][turn_id] = 1
+        logging.warning(f"DEBUGB {conv_id} ")
+
+        if turn_id < len(turns) - 1:
+            # before end of conversation
+            st.session_state["turn_id"] += 1
+            logging.warning(
+                f"conv: {conv_id}, turn: {turn_id}, {st.session_state['recordings']}"
+            )
+        else:
+            # end of conversation
+            if (
+                st.session_state["conv_id_idx"]
+                == len(st.session_state["conversations"]) - 1
+            ):  # All unselected -> All conversations done -> Finish
+                st.balloons()
+                st.title(
+                    "Please stop the recording and fill the survey and you are finished!"
                 )
             else:
-                # end of conversation
-                if (
-                    st.session_state["conv_id_idx"]
-                    == len(st.session_state["conversations"]) - 1
-                ):  # All unselected
-                    # All conversations done
-                    st.balloons()
-                    st.title("Please fill the survey and you are finished!")
-                else:
-                    st.session_state["conv_id_idx"] += 1
-                    st.session_state["turn_id"] = 0
-                    logging.warning(f"New conv conv: {conv_id}, turn: {turn_id}")
+                st.session_state["conv_id_idx"] += 1
+                st.session_state["turn_id"] = 0
+                logging.warning(f"New conv conv: {conv_id}, turn: {turn_id}")
 
-        else:
-            st.session_state["recording"] = True
-            logging.warning("starting recording")
-            # starting recording
-            start_recording()
-
-    def discard():
-        # TODO BUG discard uses turn_id + 1 turn :-P
-        st.session_state["recordings"][conv_id][turn_id] = 0
-
-        mark_audio_failure(st.session_state["participant_id"], conv_id, turn_id)
-        st.session_state["recording"] = False
+    def coffee_break():
+        # end of previous segment
+        cuts.append(
+            save_audio(
+                participant_id,
+                conv_id,
+                turn_id,
+                st.session_state["segment"],
+                st.session_state["segment_start"],
+                conversation_start,
+            )
+        )
+        # new segment
+        st.session_state["segment_start"], st.session_state["segment"] = (
+            datetime.now(),
+            "coffee",
+        )
+        info_break = st.warning("Enjoy your coffee break - You are not acting")
 
     logging.warning(f"DEBUGC {conv_id} ")
     with st.form(key="turn_navigation_form"):
         left, right = st.columns([20, 20])
         speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
-        msg_record_stop = (
-            f"⏹ Stop recording '{speaker}' prompt"
-            if st.session_state["recording"]
-            else f"⏺ Record '{speaker}' prompt"
-        )
-        left.form_submit_button(msg_record_stop, on_click=record_stop)
-        right.form_submit_button("🗑 Discard this recording ", on_click=discard)
+        left.form_submit_button(f"⏺ Record '{speaker}' prompt", on_click=start_turn)
+        right.form_submit_button("Coffee break ", on_click=coffee_break)
 
     ### recording
 

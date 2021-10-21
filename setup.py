@@ -7,15 +7,15 @@ def get_pip_deps():
     dependency_links = []
     install_requires = [
         "streamlit",
-        "streamlit_webrtc==0.30.0",
+        "streamlit_webrtc==0.31.0",
         "aiortc==1.2.1",
         "numpy==1.21.2",
         "matplotlib==3.4.3",
         "pydub==0.25.1",
         "streamlit==1.0.0",
-        "streamlit_webrtc==0.30.0",
         "typing_extensions==3.10.0.2",
         "numpy",
+        "lhotse",
     ]
     return install_requires, dependency_links
 
