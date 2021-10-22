@@ -15,12 +15,9 @@ import json
 import argparse
 import streamlit as st
 from datetime import datetime
-from lhotse import MonoCut, Recording, CutSet
+from lhotse import MonoCut, Recording, CutSet, SupervisionSegment
+from lhotse.utils import fastcopy
 
-
-TMP_DIR = Path("./rec")
-if not TMP_DIR.exists():
-    TMP_DIR.mkdir(exist_ok=True, parents=True)
 
 MEDIA_STREAM_CONSTRAINTS = {
     "video": False,
@@ -36,18 +33,31 @@ MEDIA_STREAM_CONSTRAINTS = {
 }
 
 
+def get(key, value=None):
+    return st.session_state.get(key, value)
+
+
+def ins(key, value):
+    st.session_state[key] = value
+
+
+def ins_once(key, value):
+    if key not in st.session_state:
+        ins(key, value)
+
+
 def aiortc_audio_recorder(wavpath):
     def recorder_factory():
         logging.warning("Saving {wavpath}")
         return MediaRecorder(wavpath, format="wav")
 
-    webrtc_ctx: WebRtcStreamerContext = webrtc_streamer(
+    webrtc_streamer(
         key="webrtc_streamer",
-        # audio_receiver_size=4,
-        audio_receiver_size=256,
+        audio_receiver_size=4,
+        # audio_receiver_size=256,
         sendback_audio=False,
-        mode=WebRtcMode.SENDONLY,
-        # mode=WebRtcMode.SENDRECV,
+        # mode=WebRtcMode.SENDONLY,
+        mode=WebRtcMode.SENDRECV,
         in_recorder_factory=recorder_factory,
         media_stream_constraints=MEDIA_STREAM_CONSTRAINTS,
     )
@@ -63,18 +73,96 @@ def initialize():
     )
 
 
-def save_audio(
-    participant_id, conv_id, turn_id, segment, segment_start, conversation_start
-):
-    start = (segment_start - conversation_start).total_seconds()
-    duration = (datetime.now() - segment_start).total_seconds()
-    c = MonoCut(
-        id=f"{participant_id}-{conv_id}-{turn_id}-{segment}",
-        start=segment_start,
-        duration=duration,
+def conversation_len(i):
+    return len(get("conversations")[i]["turns"])
+
+
+def get_cut():
+    pid = get("participant_id")
+    cid = get("conv_id", None)
+    tid = get("turn_id", None)
+    segment = get("segment")
+    ss = get("segment_start")
+    cs = get("conversation_start")
+    start = (ss - cs).total_seconds()
+    duration = (datetime.now() - ss).total_seconds()
+    if cid is not None:
+        current_turn = get("conversations")[cid]["turns"][tid]
+        mw_text = current_turn["utterance"]
+        mw_speaker = current_turn["speaker"]
+    i = f"{pid}-{cid}-{tid}-{segment}"
+    sup = SupervisionSegment(
+        id=i,
         channel=0,
+        recording_id=get("recording_id"),
+        start=start,
+        duration=duration,
+        text=mw_text,
+        speaker=pid,
+        custom={
+            "multiwoz": {
+                "speaker": mw_speaker,
+                "conversation_id": cid,
+                "prompt": mw_text,
+                "turn_id": tid,
+            }
+        },
     )
+    c = MonoCut(id=i, start=start, duration=duration, channel=0, supervisions=[sup])
     return c
+
+
+def set_prolific_pid():
+    params = st.experimental_get_query_params()
+    ins_once(
+        "participant_id",
+        params.get(
+            "PROLIFIC_PID",
+            [
+                "".join(
+                    random.choice(string.ascii_lowercase + string.digits)
+                    for i in range(8)
+                )
+            ],
+        )[0],
+    )
+
+
+def get_cutset(sex, age, lang, wavpath):
+    prolific_custom = {
+        "speaker": {
+            "prolificPID": get("participant_id"),
+            "sex": sex,
+            "age": age,
+            "lang": lang,
+        }
+    }
+    r = Recording.from_file(wavpath)
+    logging.warning(f"Cuts: {get('cuts')}")
+    cuts = dict(
+        [
+            (
+                c.id,
+                fastcopy(
+                    c,
+                    recording=r,
+                    supervisions=[
+                        fastcopy(
+                            c.supervisions[0],
+                            # Merge dictionaries
+                            custom={
+                                **c.supervisions[0].custom,
+                                **prolific_custom,
+                            },
+                        )
+                    ],
+                ),
+            )
+            for c in get("cuts")
+        ]
+    )
+    cs = CutSet(cuts=cuts)
+    return cs
 
 
 @st.cache(suppress_st_warning=True)
@@ -111,7 +199,7 @@ def parse_args():
     parser.add_argument(
         "--max-convs",
         type=int,
-        default=1,
+        default=2,
         help="Maximal number of conversations shown to the participant.",
     )
     parser.add_argument(
@@ -168,6 +256,140 @@ def load_data(args):
     return conversations
 
 
+def display_form():
+    st.warning("Please stop recording and fill the form")
+    with st.form(key="feedback-form"):
+        lang = st.text_input("Your native language(s)")
+        age = st.text_input("Age")
+        sex_default = "female / male"
+        sex = st.text_input("Sex", sex_default)
+        note = st.text_area("Leave us feedback:")
+        warning_placeholder = st.empty()
+        form = st.form_submit_button("Submit feedback")
+
+    questionnaire_filled = len(lang) > 0 and len(age) > 0 and sex != sex_default
+
+    if form:
+        if not questionnaire_filled:
+            warning_placeholder.error("You have to fill the form first!")
+        else:
+            st.title("Thank you!")
+            st.balloons()
+
+            cs = get_cutset(sex, age, lang, wavpath)
+            cs.to_file(outdir / f"{get('participant_id')}.jsonl.gz")
+            if len(note) > 0:
+                with open(f"feedback_{get('participant_id')}.txt", "wt") as w:
+                    w.write(note)
+
+            st.success("Thank you! Your are finished! Click below.")
+            st.markdown(
+                f"[Complete the study on prolific!](https://app.prolific.co/submissions/complete?cc={get('prolific_token')})"  # noqa
+            )
+            return True
+    return False
+
+
+def display_conversation():
+    #
+    # Assumes Python 3.7+ and stable keys sort
+    ins("conv_id", list(get("conversations"))[get("conv_id_idx")])
+
+    turns = get("conversations")[get("conv_id")]["turns"]
+    turns2display = turns[: max(get("turn_id"), 0)]
+    current_turn = turns[get("turn_id")]
+
+    # if not st.session_state["webrtc_ctx"].state.playing:
+    #     st.warning("Waiting for recording to start")
+    #     return
+
+    ins("conversation_start", datetime.now())
+    if get("turn_id") == -1:
+        ins("segment", "coffee")
+    ins("segment_start", get("conversation_start"))
+
+    info_break = st.empty()
+
+    # navigation
+    def start_turn():
+        # end of previous segment
+        get("cuts").append(get_cut())  # save
+        logging.warning(f"Cuts: {len(get('cuts'))}")
+        info_break = st.empty()
+        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
+        ins("segment_start", datetime.now())
+        ins("segment", speaker)
+
+        get("recordings")[get("conv_id")][get("turn_id")] = 1
+
+        if get("turn_id") < len(turns) - 1:
+            # before end of conversation
+            ins("turn_id", get("turn_id") + 1)
+            logging.warning(
+                f"conv: {get('conv_id')}, turn: {get('turn_id')}, {get('recordings')}"
+            )
+        else:
+            # end of conversation
+            ins("segment", "coffee")
+            if get("conv_id_idx") == len(get("conversations")) - 1:
+                # All unselected -> All conversations done -> Finish
+                # st.balloons()
+                # st.title(
+                #     "Please stop the recording and fill the survey and you are finished!"
+                # )
+                pass
+            else:
+                ins("conv_id_idx", get("conv_id_idx") + 1)
+                ins("turn_id", 0)
+                logging.warning(
+                    f"New conv conv: {get('conv_id')}, turn: {get('turn_id')}"
+                )
+
+    def coffee_break():
+        # end of previous segment
+        get("cuts").append(get_cut())
+        logging.warning(f"Cuts: {len(get('cuts'))}")
+        # new segment
+        ins("segment_start", datetime.now())
+        ins("segment", "coffee")
+        info_break = st.warning("Enjoy your coffee break - You are not acting")
+
+    with st.form(key="turn_navigation_form"):
+        left, right = st.columns([20, 20])
+        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
+        left.form_submit_button(f"⏺ Next '{speaker}' prompt", on_click=start_turn)
+        # right.form_submit_button("Coffee break ", on_click=coffee_break)
+
+    # ## recording
+
+    # ### display current turn
+    # greyer colours in past turns
+    if get("segment") == "AGENT":
+        st.info(f"{current_turn['utterance']}")
+    elif get("segment") == "CLIENT":
+        st.warning(f"{current_turn['utterance']}")
+    else:
+        assert get("segment") == "coffee", f"{get('segment')}"
+        st.error("Please click above to get your prompt!")
+
+    st.subheader("🗨️ &nbsp; Past dialog utterances:")
+    st.progress((get("turn_id") + 1) / (conversation_len(get("conv_id"))))
+
+    # past turns
+    for turn in reversed(turns2display):
+        if turn["turn_id"] == get("turn_id"):
+            # Stop before actual turn
+            break
+        if turn["speaker"] == "USER":
+            st.info(f"{turn['utterance']}")
+        else:
+            st.warning(f"{turn['utterance']}")
+    else:
+        st.markdown(
+            "**➼➼➼➼➼➼ A NEW CONVERSATION ** ...   _The prompts you record appear here._"
+        )
+
+
 def prepare_data(args):
     if "conversations" in st.session_state:
         return
@@ -184,18 +406,16 @@ def prepare_data(args):
                 continue
             eval_converasations[i] = c
 
-    st.session_state["conversations"] = eval_converasations
-    st.session_state["prolific_token"] = args.prolific_token
+    ins("conversations", eval_converasations)
+    ins("prolific_token", args.prolific_token)
 
 
 def run_application(args):
-    def conversation_len(i):
-        return len(st.session_state["conversations"][i]["turns"])
 
     #
     # Side bar & submitting
 
-    css = """ 
+    css = """
         .stRadio > div > label:first-of-type {
             display: none
         }
@@ -233,7 +453,7 @@ def run_application(args):
         #your-response-ranking {
             margin-top: 1.25rem;
         }
-    
+
         #past-dialog-utterances {
             margin-top: 0.0rem;
         }
@@ -245,246 +465,45 @@ def run_application(args):
         }
 
     """
-    if "recordings" not in st.session_state:
-        st.session_state["recordings"] = defaultdict(dict)
-    if "turn_id" not in st.session_state:
-        st.session_state["turn_id"] = 0
-
-    if "conv_id_idx" not in st.session_state:
-        st.session_state["conv_id_idx"] = 0
-
-    if "recording" not in st.session_state:
-        st.session_state["recording"] = False
+    ins_once("recordings", defaultdict(dict))
+    ins_once("turn_id", -1)
+    ins_once("conv_id_idx", 0)
 
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
     st.sidebar.title("Act as agent or user")
 
-    # create participang_id
-    params = st.experimental_get_query_params()
-    if "participant_id" not in st.session_state:
-        st.session_state["participant_id"] = params.get(
-            "PROLIFIC_PID",
-            [
-                "".join(
-                    random.choice(string.ascii_lowercase + string.digits)
-                    for i in range(8)
-                )
-            ],
-        )[0]
+    set_prolific_pid()
 
-    participant_id = st.session_state["participant_id"]
     outdir = Path(args.outdir) / args.name
     os.makedirs(outdir, exist_ok=True)
-    wavpath = f"{outdir}/{participant_id}.wav"
-    cuts = []
+    recording_id = get("participant_id") + datetime.now().strftime("%y-%m-%d-%H-%M-%S")
+    ins_once("recording_id", recording_id)
+    wavpath = f"{outdir}/{recording_id}.wav"
+    ins_once("cuts", [])
 
     aiortc_audio_recorder(wavpath)  # first way
 
     progress_msgs = []
     completed_all = []
-    for i, cid in enumerate(st.session_state["conversations"]):
-        completed = sum(st.session_state["recordings"][cid].values())
+    for i, cid in enumerate(get("conversations")):
+        completed = sum(get("recordings")[cid].values())
         total = conversation_len(cid)
-        completed_all.append(completed == total)
-        progress_msgs.append(f"Conversation {i+1} ({completed}/{total} completed)")
-    st.sidebar.markdown(" <br />\n".join(progress_msgs))
+        completed_all.append(completed >= total)
+        progress_msgs.append(
+            f"{i + 1}. Conversation {i+1} ({completed}/{total} completed)"
+        )
+    st.sidebar.markdown("\n".join(progress_msgs))
 
-    with st.sidebar.form(key="feedback-form"):
-        lang = st.text_input("Your native language(s)")
-        age = st.text_input("Age")
-        sex_default = "female / male"
-        sex = st.text_input("Sex", sex_default)
-        note = st.text_area("Leave us feedback:")
-        warning_placeholder = st.empty()
-        final_submit = st.form_submit_button("Submit feedback")
-
-    questionnaire_filled = len(lang) > 0 and len(age) > 0 and sex != sex_default
-
-    submitted = False
-    if final_submit:
-        submitted = True
-
-        if (
-            all(completed_all)
-            and questionnaire_filled
-            # and not st.session_state["webrtc_ctx"].state.playing
-        ):
-
-            st.title("Thank you!")
-            st.balloons()
-
-            customd = {"prolificPID": participant_id}
-
-            r = Recording.from_file(wavpath)
-            cuts = [
-                fastcopy(
-                    c,
-                    recording=r,
-                    supervisions=[fastcopy(c.supervisions[0], custom=customd)],
-                )
-                for c in cuts
-            ]
-            cs = CutSet(cuts=cuts)
-            cs.to_file(outdir / f"{participant_id}.jsonl.gz")
-
-            st.success("Thank you! Your are finished! Click below.")
-            st.markdown(
-                f"[Complete the study on prolific!](https://app.prolific.co/submissions/complete?cc={st.session_state['prolific_token']})"
-            )
+    if not all(completed_all):
+        display_conversation()
+    else:
+        done = display_form()
+        if done:
             return
-
-    if submitted:
-        # if st.session_state["webrtc_ctx"].state.playing:
-        #     warning_placeholder.error("You have to stop the recording first!")
-
-        if any(
-            [
-                sum(st.session_state["recordings"][cid].values())
-                < conversation_len(cid)
-                for cid in st.session_state["conversations"]
-            ]
-        ):
-            warning_placeholder.error(
-                "You have to record all the conversrations first!"
-            )
-        if not questionnaire_filled:
-            warning_placeholder.error("You have to fill the form first!")
-
-    #
-    # Conversation page
-
-    #
-    # Turn page
-
-    # Assumes Python 3.7+ and stable keys sort
-    conv_id = list(st.session_state["conversations"])[st.session_state["conv_id_idx"]]
-
-    turn_id = st.session_state["turn_id"]
-    turns = st.session_state["conversations"][conv_id]["turns"]
-    turns2display = turns[:turn_id]
-    current_turn = turns[turn_id]
-
-    # if not st.session_state["webrtc_ctx"].state.playing:
-    #     st.warning("Waiting for recording to start")
-    #     return
-
-    conversation_start = datetime.now()
-    st.session_state["segment"] = "coffee"
-    st.session_state["segment_start"] = conversation_start
-
-    info_break = st.empty()
-
-    logging.warning(f"DEBUGA {conv_id}")
-    # navigation
-    def start_turn():
-        # end of previous segment
-        cuts.append(
-            save_audio(
-                participant_id,
-                conv_id,
-                turn_id,
-                st.session_state["segment"],
-                st.session_state["segment_start"],
-                conversation_start,
-            )
-        )
-        # new segment
-        info_break = st.empty()
-        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
-        st.session_state["segment_start"], st.session_state["segment"] = (
-            datetime.now(),
-            speaker,
-        )
-
-        st.session_state["recordings"][conv_id][turn_id] = 1
-        logging.warning(f"DEBUGB {conv_id} ")
-
-        if turn_id < len(turns) - 1:
-            # before end of conversation
-            st.session_state["turn_id"] += 1
-            logging.warning(
-                f"conv: {conv_id}, turn: {turn_id}, {st.session_state['recordings']}"
-            )
-        else:
-            # end of conversation
-            if (
-                st.session_state["conv_id_idx"]
-                == len(st.session_state["conversations"]) - 1
-            ):  # All unselected -> All conversations done -> Finish
-                st.balloons()
-                st.title(
-                    "Please stop the recording and fill the survey and you are finished!"
-                )
-            else:
-                st.session_state["conv_id_idx"] += 1
-                st.session_state["turn_id"] = 0
-                logging.warning(f"New conv conv: {conv_id}, turn: {turn_id}")
-
-    def coffee_break():
-        # end of previous segment
-        cuts.append(
-            save_audio(
-                participant_id,
-                conv_id,
-                turn_id,
-                st.session_state["segment"],
-                st.session_state["segment_start"],
-                conversation_start,
-            )
-        )
-        # new segment
-        st.session_state["segment_start"], st.session_state["segment"] = (
-            datetime.now(),
-            "coffee",
-        )
-        info_break = st.warning("Enjoy your coffee break - You are not acting")
-
-    logging.warning(f"DEBUGC {conv_id} ")
-    with st.form(key="turn_navigation_form"):
-        left, right = st.columns([20, 20])
-        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
-        left.form_submit_button(f"⏺ Record '{speaker}' prompt", on_click=start_turn)
-        right.form_submit_button("Coffee break ", on_click=coffee_break)
-
-    ### recording
-
-    #### display current turn
-    # greyer colours in past turns
-    if current_turn["speaker"] == "USER":
-        st.info(f"{current_turn['utterance']}")
-    else:
-        st.warning(f"{current_turn['utterance']}")
-
-    st.subheader("🗨️ &nbsp; Past dialog utterances:")
-    st.progress((turn_id + 1) / (conversation_len(conv_id)))
-
-    # past turns
-    for turn in reversed(turns2display):
-        # __import__("ipdb").set_trace()
-        if turn["turn_id"] == turn_id:
-            # Stop before actual turn
-            break
-        if turn["speaker"] == "USER":
-            st.info(f"{turn['utterance']}")
-        else:
-            st.warning(f"{turn['utterance']}")
-    else:
-        st.markdown(
-            "**➼➼➼➼➼➼ A NEW CONVERSATION ** ...   _The prompts you record appear here._"
-        )
-    logging.warning(f"DEBUGZ {conv_id} ")
-
-    # TODO dialogue history
-    # db_results = [
-    #     f"{domain}: {len(turn_data.api_result[domain]['results'])}"
-    #     for domain in turn_data.api_result
-    # ]
-    # st.error(f"*Available database entries:* {', '.join(db_results)}")
 
 
 if __name__ == "__main__":
-
     initialize()
     args = parse_args()
     prepare_data(args)
