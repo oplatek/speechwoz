@@ -37,6 +37,10 @@ def get(key, value=None):
     return st.session_state.get(key, value)
 
 
+def wavpath():
+    return f"{get('outdir')}/{get('recording_id')}.wav"
+
+
 def ins(key, value):
     st.session_state[key] = value
 
@@ -46,10 +50,10 @@ def ins_once(key, value):
         ins(key, value)
 
 
-def aiortc_audio_recorder(wavpath):
+def aiortc_audio_recorder():
     def recorder_factory():
-        logging.warning("Saving {wavpath}")
-        return MediaRecorder(wavpath, format="wav")
+        logging.warning("Saving {wavpath()}")
+        return MediaRecorder(wavpath(), format="wav")
 
     webrtc_streamer(
         key="webrtc_streamer",
@@ -128,7 +132,7 @@ def set_prolific_pid():
     )
 
 
-def get_cutset(sex, age, lang, wavpath):
+def get_cutset(sex, age, lang):
     prolific_custom = {
         "speaker": {
             "prolificPID": get("participant_id"),
@@ -137,7 +141,7 @@ def get_cutset(sex, age, lang, wavpath):
             "lang": lang,
         }
     }
-    r = Recording.from_file(wavpath)
+    r = Recording.from_file(wavpath())
     logging.warning(f"Cuts: {get('cuts')}")
     cuts = dict(
         [
@@ -199,7 +203,7 @@ def parse_args():
     parser.add_argument(
         "--max-convs",
         type=int,
-        default=2,
+        default=1,
         help="Maximal number of conversations shown to the participant.",
     )
     parser.add_argument(
@@ -217,7 +221,7 @@ def parse_args():
         "-o",
         "--outdir",
         type=str,
-        default="outputs",
+        default=".",
     )
     return parser.parse_args()
 
@@ -257,7 +261,6 @@ def load_data(args):
 
 
 def display_form():
-    st.warning("Please stop recording and fill the form")
     with st.form(key="feedback-form"):
         lang = st.text_input("Your native language(s)")
         age = st.text_input("Age")
@@ -276,8 +279,8 @@ def display_form():
             st.title("Thank you!")
             st.balloons()
 
-            cs = get_cutset(sex, age, lang, wavpath)
-            cs.to_file(outdir / f"{get('participant_id')}.jsonl.gz")
+            cs = get_cutset(sex, age, lang)
+            cs.to_file(get("outdir") / f"{get('participant_id')}.jsonl.gz")
             if len(note) > 0:
                 with open(f"feedback_{get('participant_id')}.txt", "wt") as w:
                     w.write(note)
@@ -471,18 +474,18 @@ def run_application(args):
 
     st.markdown("<style>" + css + "</style>", unsafe_allow_html=True)
 
-    st.sidebar.title("Act as agent or user")
+    st.sidebar.markdown("### _Conversation recording progress_")
 
     set_prolific_pid()
-
-    outdir = Path(args.outdir) / args.name
-    os.makedirs(outdir, exist_ok=True)
-    recording_id = get("participant_id") + datetime.now().strftime("%y-%m-%d-%H-%M-%S")
+    ins_once("outdir", Path(args.outdir) / args.name)
+    os.makedirs(get("outdir"), exist_ok=True)
+    recording_id = get(
+        "participant_id"
+    )  # + datetime.now().strftime("%y-%m-%d-%H-%M-%S")
     ins_once("recording_id", recording_id)
-    wavpath = f"{outdir}/{recording_id}.wav"
     ins_once("cuts", [])
 
-    aiortc_audio_recorder(wavpath)  # first way
+    aiortc_audio_recorder()  # first way
 
     progress_msgs = []
     completed_all = []
@@ -495,12 +498,27 @@ def run_application(args):
         )
     st.sidebar.markdown("\n".join(progress_msgs))
 
-    if not all(completed_all):
-        display_conversation()
+    st.sidebar.title("Instructions")
+    st.sidebar.markdown(
+        """
+    1. ### Read the prompt precisely
+    2. ### Act as un client or call center agent
+    3. ### Do not stop the recording before you record all the conversations
+    """
+    )
+
+    if not get("webrtc_streamer").state.playing and not all(completed_all):
+        st.error("Start the recording by clicking above on the Start button")
     else:
-        done = display_form()
-        if done:
-            return
+        if not all(completed_all):
+            display_conversation()
+        else:
+            if get("webrtc_streamer").state.playing:
+                st.error("Stop the recording before you fill the final form")
+            else:
+                done = display_form()
+                if done:
+                    return
 
 
 if __name__ == "__main__":
