@@ -37,10 +37,6 @@ def get(key, value=None):
     return st.session_state.get(key, value)
 
 
-def wavpath():
-    return f"{get('outdir')}/{get('recording_id')}.wav"
-
-
 def ins(key, value):
     st.session_state[key] = value
 
@@ -50,10 +46,10 @@ def ins_once(key, value):
         ins(key, value)
 
 
-def aiortc_audio_recorder():
+def aiortc_audio_recorder(wavpath):
     def recorder_factory():
-        logging.warning("Saving {wavpath()}")
-        return MediaRecorder(wavpath(), format="wav")
+        logging.warning(f"Saving audio to {wavpath}")
+        return MediaRecorder(wavpath, format="wav")
 
     webrtc_streamer(
         key="webrtc_streamer",
@@ -132,7 +128,8 @@ def set_prolific_pid():
     )
 
 
-def get_cutset(sex, age, lang):
+def get_cutset(sex, age, lang, wavpath):
+    logging.warning(f"Saving cutset for recording {wavpath}")
     prolific_custom = {
         "speaker": {
             "prolificPID": get("participant_id"),
@@ -141,7 +138,7 @@ def get_cutset(sex, age, lang):
             "lang": lang,
         }
     }
-    r = Recording.from_file(wavpath())
+    r = Recording.from_file(wavpath)
     logging.warning(f"Cuts: {get('cuts')}")
     cuts = dict(
         [
@@ -203,7 +200,7 @@ def parse_args():
     parser.add_argument(
         "--max-convs",
         type=int,
-        default=1,
+        default=2,
         help="Maximal number of conversations shown to the participant.",
     )
     parser.add_argument(
@@ -260,7 +257,7 @@ def load_data(args):
     return conversations
 
 
-def display_form():
+def display_form(wavpath):
     with st.form(key="feedback-form"):
         lang = st.text_input("Your native language(s)")
         age = st.text_input("Age")
@@ -279,7 +276,7 @@ def display_form():
             st.title("Thank you!")
             st.balloons()
 
-            cs = get_cutset(sex, age, lang)
+            cs = get_cutset(sex, age, lang, wavpath)
             cs.to_file(get("outdir") / f"{get('participant_id')}.jsonl.gz")
             if len(note) > 0:
                 with open(f"feedback_{get('participant_id')}.txt", "wt") as w:
@@ -477,7 +474,8 @@ def run_application(args):
     st.sidebar.markdown("### _Conversation recording progress_")
 
     set_prolific_pid()
-    ins_once("outdir", Path(args.outdir) / args.name)
+    outdir = Path(args.outdir) / args.name
+    ins_once("outdir", outdir)
     os.makedirs(get("outdir"), exist_ok=True)
     recording_id = get(
         "participant_id"
@@ -485,7 +483,8 @@ def run_application(args):
     ins_once("recording_id", recording_id)
     ins_once("cuts", [])
 
-    aiortc_audio_recorder()  # first way
+    wavpath = f"{get('outdir')}/{get('recording_id')}.wav"
+    aiortc_audio_recorder(wavpath)
 
     progress_msgs = []
     completed_all = []
@@ -516,7 +515,7 @@ def run_application(args):
             if get("webrtc_streamer").state.playing:
                 st.error("Stop the recording before you fill the final form")
             else:
-                done = display_form()
+                done = display_form(wavpath)
                 if done:
                     return
 
