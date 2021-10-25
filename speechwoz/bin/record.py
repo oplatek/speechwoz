@@ -339,7 +339,8 @@ def display_conversation():
         ins("segment_start", datetime.now())
         ins("segment", speaker)
 
-        get("recordings")[get("conv_id")][get("turn_id")] = 1
+        if get("turn_id") >= 0:
+            get("recordings")[get("conv_id")][get("turn_id")] = 1
 
         if get("turn_id") < len(turns) - 1:
             # before end of conversation
@@ -359,7 +360,7 @@ def display_conversation():
                 pass
             else:
                 ins("conv_id_idx", get("conv_id_idx") + 1)
-                ins("turn_id", 0)
+                ins("turn_id", -1)
                 logging.warning(
                     f"New conv conv: {get('conv_id')}, turn: {get('turn_id')}"
                 )
@@ -375,17 +376,17 @@ def display_conversation():
 
     with st.form(key="turn_navigation_form"):
         left, right = st.columns([20, 20])
-        speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
-        left.form_submit_button(f"⏺ Next '{speaker}' prompt", on_click=start_turn)
+        left.form_submit_button("⏺ Next prompt", on_click=start_turn)
         # right.form_submit_button("Coffee break ", on_click=coffee_break)
 
     # ## recording
 
     # ### display current turn
-    # greyer colours in past turns
     if get("segment") == "AGENT":
+        st.markdown(f"_CLIENT_:")  # TODO BUG why verse versa?
         st.info(f"{current_turn['utterance']}")
     elif get("segment") == "CLIENT":
+        st.markdown(f"_AGENT_:")  # TODO BUG why verse versa?
         st.warning(f"{current_turn['utterance']}")
     else:
         assert get("segment") == "coffee", f"{get('segment')}"
