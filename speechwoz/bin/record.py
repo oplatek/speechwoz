@@ -8,6 +8,7 @@ from pathlib import Path
 import os
 from collections import defaultdict
 import logging
+import time
 import string
 import random
 import numpy as np
@@ -138,7 +139,7 @@ def get_cutset(sex, age, lang, wavpath):
             "lang": lang,
         }
     }
-    r = Recording.from_file(wavpath)
+    r = Recording.from_file(wavpath) if wavpath is not None else None
     logging.warning(f"Cuts: {get('cuts')}")
     cuts = dict(
         [
@@ -276,10 +277,28 @@ def display_form(wavpath):
             st.title("Thank you!")
             st.balloons()
 
+            SLEEP_TIME = 0.1
+            for try_num in range(10):
+
+                if Path(wavpath).exists():
+                    logging.warning(
+                        f"The recording was available after {SLEEP_TIME * try_num} seconds"
+                    )
+                    break
+                time.sleep(SLEEP_TIME)
+
+            if not Path(wavpath).exists():
+                logging.error(
+                    f"Recording {wavpath} not found Lhotse Cutsets will be corrupted"
+                )
+                wavpath = None
+
             cs = get_cutset(sex, age, lang, wavpath)
             cs.to_file(get("outdir") / f"{get('participant_id')}.jsonl.gz")
             if len(note) > 0:
-                with open(f"feedback_{get('participant_id')}.txt", "wt") as w:
+                with open(
+                    f"{get('outdir')}/feedback_{get('participant_id')}.txt", "wt"
+                ) as w:
                     w.write(note)
 
             st.success("Thank you! Your are finished! Click below.")
