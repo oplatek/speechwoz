@@ -333,7 +333,7 @@ def display_conversation():
     def start_turn():
         # end of previous segment
         get("cuts").append(get_cut())  # save
-        logging.warning(f"Cuts: {len(get('cuts'))}")
+        logging.info(f"Cuts: {len(get('cuts'))}")
         info_break = st.empty()
         speaker = "CLIENT" if current_turn["speaker"] == "USER" else "AGENT"
         ins("segment_start", datetime.now())
@@ -521,7 +521,7 @@ def run_application(args):
     st.sidebar.markdown(
         """
     1. ### Read the prompt precisely
-    2. ### Act as un client or call center agent
+    2. ### Act as a client or call center agent
     3. ### Do not stop the recording before you record all the conversations
     """
     )
