@@ -1,12 +1,13 @@
 <html>
     <head>
-        <title>Flask-SocketIO-Chat: {{ room }}</title>
+      <title>Flask-SocketIO-Chat: {{ room }} {{ name }} </title>
         <script type="text/javascript" src="//code.jquery.com/jquery-1.4.2.min.js"></script>
         <script type="text/javascript" src="//cdn.socket.io/4.4.1/socket.io.min.js"></script>
         <script type="text/javascript" charset="utf-8">
             var socket;
             $(document).ready(function(){
-                socket = io.connect('http://' + document.domain + ':' + location.port + '/chat');
+                // socket = io.connect('http://' + document.domain + ':' + location.port + '/chat');
+              socket = io.connect('http://' + document.domain + ':' + location.port + '{{ url_for("main.chat") }}', {'path': '{{ url_for("main.index") }}' + '/socket.io'});
                 socket.on('connect', function() {
                     socket.emit('joined', {});
                 });
@@ -38,7 +39,7 @@
         </script>
     </head>
     <body>
-        <h1>Flask-SocketIO-Chat: {{ room }}</h1>
+      <h1>Flask-SocketIO-Chat: {{ room }} {{ name }}</h1>
         <textarea id="chat" cols="80" rows="20"></textarea><br><br>
         <input id="text" size="80" placeholder="Enter your message here"><br><br>
         <a href="#" onclick="leave_room();">Leave this room</a>
