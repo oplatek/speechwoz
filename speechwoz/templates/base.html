@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>Speechwoz {% block title%}{% endblock %}: Annotate for better help lines!</title>
+
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width">
+
+	<link rel="shortcut icon" href="{{ url_for('static', filename='img/favicon/favicon.ico') }}">
+
+	<script src="{{ url_for('static', filename='js/speechwoz.js') }}"></script>
+	<script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+
+	<link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='/css/speechwoz.css') }}">
+</head>
+<body>
+<section class="content">
+
+  <div id="ann_id_desc" class="user_id"> Your anonymized user ID</div>
+  <div id="ann_id" class="user_id"></div>
+  <div id="microphone_onoff_descr">🎤</div>
+  <div id="microphone_onoff"></div>
+  <a class="logout" href="">Logout/Stop Recording</a>
+
+  <header>{% block header %}{% endblock %} </header>
+  <div id="flash_msgs">
+  {% for message in get_flashed_messages() %}
+  <div class="flash">{{ message }}</div><!-- class="flash"-->
+  {% endfor %}
+  </div><!--id="flash_msgs"-->
+  {% block content %}{% endblock %}
+</section> <!--class="content"-->
+
+
+<script>
+// ---------- data declaration and helper functions --------- //
+// variable to be used in speechwoz.js
+const ANN_UNKNOWN = "ANN_UNKNOWN"
+const ROLE_UNKNOWN = "ROLE_UNKNOWN"
+const ROLE_AGENT = "ROLE_AGENT"
+const ROLE_CALLER = "ROLE_CALLER"
+
+const MODE_REGISTRATION = "MODE_REGISTRATION"  // registration not done
+const MODE_READING = "MODE_READING"  // registration is done but cannot be in mode_conversation
+const MODE_CONVERSATION = "MODE_CONVERSATION" // registration is done; both agent and caller connected and onboarded and all other conditions
+const MODE_SURVEY = "MODE_CONVERSATION"  // all job done but cannot be logout yet --> after the user has to go to registration again
+
+window.sw_version = "{{ config['VERSION'] }}";
+window.prefix_static = "{{ url_for('static', filename='') }}"
+window.prefix_index = "{{ url_for('index') }}"
+
+window.prolific_code = "{{ config['PROLIFIC_CODE'] }}"
+window.twilio_number = "{{ config['TWILIO_NUMBER'] }}"
+
+{% if g.annotator_info  %}
+window.annotator_info = {{ g.annotator_info | tojson | safe }}
+{% else %}
+window.annotator_info = {id: ANN_UNKNOWN, role: ROLE_UNKNOWN}
+{% endif %}
+
+function role() { return window.annotator_info['role']; }
+function ann_id() { return window.annotator_info['id']; }
+  window. mode  = "{{ session.get('mode', 'MODE_REGISTRATION') }}"
+
+// TODO variables to be used for task management
+// key: prolific_pid value: studyid
+window.waiting_pids = {}
+
+
+  // ----- UI & Data presentation -----/
+window.onload = function () {
+  document.getElementById("ann_id").innerHTML = ann_id();
+
+}
+
+{% block script_override %}{% endblock %}
+</script>
+<script src="{{ host_prefix }}/static/js/speechwoz.js"></script>
+</body>
+</html>

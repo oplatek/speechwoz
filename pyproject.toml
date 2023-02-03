@@ -1,0 +1,32 @@
+[project]
+name = "speechwoz"
+description = "Annotation interface for collecting Speechwoz; Spoken MultiWOZ"
+readme = "README.md"
+license = {text = "Apache 2.0"}
+maintainers = [{name = "Speechwoz", email = "ondrej.platek@seznam.cz"}]
+dependencies = [
+    "flask==2.2.0",
+    "gunicorn>=20.1.0",
+]
+
+[project.urls]
+Documentation = "TODO"
+Demo = "https://quest.ms.mff.cuni.cz/namuddis/speechwoz/"
+
+[project.optional-dependencies]
+test = ["pytest", "black"]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["speechwoz", "tests"]
+
+[tool.black]
+line-length = 120

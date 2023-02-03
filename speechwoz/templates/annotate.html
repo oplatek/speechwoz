@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+
+{% block header %}
+  <h1>Annotation {% block title %}Interface {% endblock %}</h1>
+  {% if g.annotator_info %}
+    Anonymized Annotator ID: {{ g.annotator_info.id }}
+  {% else %}
+    <a class="action" href="{{ url_for('index') }}">You must register. Please, see the landing page!</a>
+  {% endif %}
+{% endblock %}
+
+{% block content %}
+TODO terminal - see socketio chat.py template
+{% endblock %}
+
+{% block script_override %}
+<script>
+
+// readonly during
+if (window.role() === ROLE_AGENT) {
+  const window.multiwozdb = {{ session.multiwozdb | tojson | safe }};
+} else {
+  const window.multiwozdb = null;
+
+}
+
+window.terminal_history = "{{ default_dataset }}";
+window.current_conversation = null;
+window.microphone_recording = false;
+// telephone_number_state: unknown -> filled -> verified (after accepting call with that number)
+window.telephone_number_state = "unknown";
+window.conversations = {};
+
+
+window.annotator_info = "{{ annotator_info | tojson | safe }}"
+// stores unsaved conversations before are submitted to server
+// conversations
+// stores all relevant events
+// conversations =
+//   { {"id": "1", "audio_len": XY, "agent_id": "null or hash(+420XY)", "caller_id": "null or hash(+420XY)", agent_queries
+
+</script>
+{% endblock %}

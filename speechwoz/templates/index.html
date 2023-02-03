@@ -1,0 +1,209 @@
+{% extends 'base.html' %}
+{% block header %}
+<h1>{% block title %} Registration & Onboarding [5 min]{% endblock %}</h1>
+{% endblock %}
+{% block content %}
+
+<div class="overview">
+  <p>
+  You are going to participate in a study that collect audio recordings in order to improve help lines and contact call centers.
+  </p>
+  <p>The study has four main parts: </p>
+
+  <ol>
+    <li><strong> Onboarding </strong> where you setup your microphone and accept the recoring terms.</li>
+    <li><strong>Individual conversation recording</strong>. You act as both agent and the caller and act in both roles following the script. Focus on making the act natural while sticking to the script. If you omit or miscpronounce a word, continue as any actor during live performance. You cannot rerecord.</li>
+    <li><strong>Recording a phone call.</strong> You are playing <span id="role"></span>. Your partner is playing <span id="other_role"></span>. You will be prompted during the individual conversation recording that the phone line is ready. You will have 20 seconds to call the <span id="twilio_number"></span>number. You will learn more about your at the end of onboarding in the <a href="#role-instructions-wrapper">Role section</a></li>
+    <li>At the end of the study you will fill a short <strong>survey</strong>.</li>
+  </ol>
+</div>
+
+
+<div class="terms" id="terms_descr">
+  <ul>
+    <li>I accept that I will turn on microphone during this study.</li>
+    <li>I accept that I will be recorded from the the time I turn on the microphone until I reach the survey page at the end of the study.</li>
+    <li>It is forbidden to record any personal information - do not speak about yourself or do not record anybody whe the microphone recording is active. Just follow the instructions.</li>
+    <li>I donate my voice recording for research and commercial application under the rules of <a href="https://librivox.org/pages/public-domain/"> Public Domain</a>.</li>
+    <li>I record the voice using my natural voice as I would use it in reality</ul>
+    <li>I will follow the instructions and try to complete the study as best as I can</li>
+</div>
+<button class="terms" id="accept_terms" onclick="accept_terms_onclick()">I Agree to the Terms and Conditions</button>
+<div class="terms" id="terms_result"></div>
+
+<div id="visible-after-terms">
+
+
+<h3>Samples for other recording</h3>
+<p> We recommend to have either a <strong> well-tested headset</strong> or <strong>high-end tablet with keyboard</strong>. Tablets tend to have better microphone setups. Listen to examples below what quality we expect!</p>
+
+<div class="sample">
+  <strong>Recording in clean environment with a good microphone setup</strong>
+  <br>
+  <audio controls="controls" src="{{ url_for('static', filename='recordings/LJ037-0171.wav')}}"></audio>
+</div>
+
+<div class="sample">
+  Acceptable recording acceptable microphone setup in clean background.
+  <br>
+  <audio controls="controls" src="{{ url_for('static', filename='recordings/dstc11-okish-line_nr__730_dialog_id__mul0046.json_turn_id__1.wav')}}"></audio>
+</div>
+
+<div class="sample">
+  <strong>Unacceptable!</strong> Recording with <strong>noisy setup background</strong> at the beginning. Note that the accent is completely fine.
+  <br>
+  <audio controls="controls" src="{{ url_for('static', filename='recordings/dstc11-start-BAD-background-noise-line_nr__1714_dialog_id__mul0013.json_turn_id__1.wav')}}"></audio>
+</div>
+<div class="sample">
+  <strong>Unacceptable! Broken microphone setup</strong>.
+  <br>
+    <audio controls="controls" src="{{ url_for('static', filename='recordings/bad-MIC-setup-or-windy-background-line_nr__5210_dialog_id__mul0036.json_turn_id__1.wav')}}"></audio>
+</div>
+
+<div class="microphone-testing">
+  <h2>Turn on your microphone and test that your setup is acceptable! [2+min]</h2>
+  <p>Participate in the study only if you can record in silent environment and have a good audio setup.</p>
+  <p>
+      <button id="startRecording">Start recording</button>
+      <button id="stopRecording" disabled>Stop recording</button>
+  </p>
+  <div id="recorded-container">
+  </div>
+</div>
+
+
+
+
+<div class="role_instructions" id="role-instructions-wrapper">
+  <h2>Instructions for your role for a phone recording</h2>
+  <!-- todo hide the instructions for the other role-->
+  <div class="role_instructions" id="role-instructions-agent">
+    As an Agent, you will have acccess the the database of information.
+    In addition, you will be presented with a transcript of an conversation on the same topic  however the caller might ask different questions. Feel free to provide the information based on the database or the example conversation if you think the informations are fitting.
+  </div><!-- id="role-instructions-wrapper" -->
+  <div class="role_instructions" id="role-instructions-caller">
+    You will be presented with a instructions what you should ask about. See the example below. Follow the instructions closely!
+    <div class="dstc-message">
+You are looking for a <span class='emphasis'>place to stay</span>. The hotel should be in the <span class='emphasis'>cheap</span> price range and should be in the type of <span class='emphasis'>hotel</span> The hotel should <span class='emphasis'>include free parking</span> and should <span class='emphasis'>include free wifi</span> Once you find the <span class='emphasis'>hotel</span> you want to book it for <span class='emphasis'>6 people</span> and <span class='emphasis'>3 nights</span> starting from <span class='emphasis'>tuesday</span> If the booking fails how about <span class='emphasis'>2 nights</span>
+Make sure you get the <span class='emphasis'>reference number</span>
+    </div
+  </div><!--id="role-instructions-caller" -->
+</div>
+</div><!-- id="visible-after-terms" -->
+
+
+<h2>TODOs</h2>
+<ol>
+  <li> TODO test if microphone setup survives click</li>
+  <li>TODO test if I go to annotate the microphone survives the settings, without asking for permissios</li>
+  <li>TODO logout deletes URL parameters and display flash message if somebody not logout</li>
+</ol>
+
+<h3>Go to annotation interface. <a id="go-annotate" href="{{ url_for('annotate') }}" onclick="return check_go_annotate_link();">I have read the instructions, accepted terms and have quite and usable recording audio setup. Go!</a></h3>
+
+{% endblock %}
+{% block script_override %}
+document.getElementById("role").innerHTML = role();
+document.getElementById("twilio_number").innerHTML = twilio_number;
+
+navigator
+    .mediaDevices
+    .getUserMedia({audio: true})
+    .then(stream => { handlerFunction(stream) });
+
+function handlerFunction(stream) {
+    rec = new MediaRecorder(stream);
+    rec.ondataavailable = e => {
+        audioChunks.push(e.data);
+        if (rec.state == "inactive") {
+            let blob = new Blob(audioChunks, {type: 'audio/mpeg-3'});
+            uploadOnboarding(blob);
+        }
+    }
+}
+
+function numOnboardingSamples() {
+  const container = document.getElementById('recorded-container');
+  return container.children.length;
+}
+
+function createSampleDiv(audio_src) {
+  recorded_url = audio_src;
+  console.log("New recorded onboarding: " + recorded_url)
+  divhtml  = "<div class='sample'>Sample " +
+    (numOnboardingSamples() + 1)+
+    " <strong>Listen to your recording and re-record if the quality is not good!</strong><br>" +
+    "<audio controls='controls' src='" + recorded_url + "'></audio>" +
+    "</div>"
+  return divhtml
+}
+
+function uploadOnboarding(data) {
+    var form = new FormData();
+    // TODO change to wav file
+    form.append('file', data, 'data.mp3');
+    form.append('title', 'data.mp3');
+    //Chrome inspector shows that the post data includes a file and a title.
+    $.ajax({
+        type: 'POST',
+        url: "{{ url_for('upload_recording', source='onboarding') }}",
+        data: form,
+        cache: false,
+        processData: false,
+        contentType: false
+    }).done(function(data) {
+        console.log(data);
+        rec_container = document.getElementById("recorded-container")
+        rec_container.innerHTML = rec_container.innerHTML + "\n" + createSampleDiv(data["path"])
+    });
+}
+
+startRecording.onclick = e => {
+    console.log('Recording are started..');
+    startRecording.disabled = true;
+    stopRecording.disabled = false;
+    audioChunks = [];
+    rec.start();
+};
+
+stopRecording.onclick = e => {
+    console.log("Recording are stopped.");
+    startRecording.disabled = false;
+    stopRecording.disabled = true;
+    rec.stop();
+};
+
+agent_instructions = document.getElementById("role-instructions-agent")
+if (role() == ROLE_AGENT) {
+  agent_instructions.visible = true
+} else {
+  agent_instructions.visible = true
+}
+
+caller_instructions = document.getElementById("role-instructions-caller")
+if (role() == ROLE_AGENT) {
+  caller_instructions.visible = true
+} else {
+  caller_instructions.visible = true
+}
+
+document.accepted_terms = false;
+function accept_terms_onclick() {
+  document.accepted_terms = true
+  accept_terms_button = document.getElementById("accept_terms")
+  accept_terms_button.innerText = accept_terms_button.innerText + " [Accepted]"
+  accept_terms_button.disabled = document.accepted_terms;
+
+}
+
+function check_go_annotate_link() {
+  if ((document.accepted_terms && (numOnboardingSamples() > 1))) {
+    return true
+  } else {
+    alert("You must agree to the terms and record a sample with your audio setup and listen to a recording to verify you have a good audio setup! ACCEPT TERMS and START RECORDING by clicking 'Start recording' buttong!")
+    return false
+  }
+}
+
+
+{% endblock %}
