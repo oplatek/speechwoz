@@ -81,11 +81,12 @@ def upload_recording(source):
         flash("No selected file")
         return jsonify(status="no-filename")
     file_name = session["ann_id"] + str(uuid.uuid4()) + ".mp3"
-    appdir = os.path.dirname(os.path.realpath(__file__))
-    recpath = url_for("static", filename=f"recordings/{source}/{file_name}")
-    localpath = appdir + recpath
-    logging.info(f"Saving to {localpath}\n\t accessible at {recpath}")
+    appdir = Path(os.path.dirname(os.path.realpath(__file__)))
+    local_suffix = f"recordings/{source}/{file_name}"
+    localpath = appdir / 'static' / local_suffix
+    audio_url = url_for("static", filename=local_suffix)
+    logging.info(f"Saving to {localpath}\n\t accessible at {audio_url}")
     file.save(localpath)
     # TODO add to DB
     # TODO save as wav
-    return jsonify(status="ok", path=recpath)
+    return jsonify(status="ok", path=audio_url)
